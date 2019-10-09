@@ -1,0 +1,5 @@
+{
+  "MQTT_BROKER_URL": "mqtt://localhost:1883",
+  "LIGHT_COUNT": "128"
+}
+
