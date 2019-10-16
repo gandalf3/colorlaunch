@@ -4,8 +4,10 @@ import json
 import paho.mqtt.client as mqtt
 import time
 import logging
+import array
+
+logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 
 def read_config():
     config_path = 'config.json'
@@ -22,6 +24,8 @@ def read_config():
 
 class MQTTAdapter:
     def __init__(self, address, port):
+        self.log = logging.getLogger('MQTTAdapter')
+
         self.address = address
         self.port = port
 
@@ -30,74 +34,154 @@ class MQTTAdapter:
         self.client.on_message = self._on_message
         self.client.enable_logger()
 
-        self._handle_color_send    = None
-        self._handle_color_collide = None
-
+        self._msg_handler    = None
 
     def _on_connect(self, client, userdata, flags, rc):
-        self.client.subscribe("playanimation")
+        self.client.subscribe("/spectrum/colors")
 
 
     def _on_message(self, client, userdata, msg):
 
-        if (msg.topic == "playanimation"):
-            
-            try:
-                payload = json.loads(msg.payload)
-            except json.decoder.JSONDecodeError as err:
-                log.error("invalid json in mqtt message %s" % err)
-                return
-
-            if (payload['type'] == 'colorsend'):
-
-                missing_keys = [key for key in ['end', 'color'] if key not in payload]
-                if any(missing_keys):
-                    log.error("mqtt message missing required key(s) %s" % missing_keys)
+        try:
+            if (msg.topic == "/spectrum/colors"):
+                
+                try:
+                    payload = json.loads(msg.payload)
+                except json.decoder.JSONDecodeError as err:
+                    log.error("invalid json in mqtt message %s" % err)
                     return
 
-                if self._handle_color_send:
-                    self.handle_color_send()
+                if self._msg_handler:
+                    self._msg_handler(payload)
+                else:
+                    log.warning("no handler defined, message ignored")
 
-            # elif (payload['type'] == 'colorcollide'):
-            #     if self._handle_color_collide:
-            #         self._handle_color_collide(payload['position'], payload['color1'], payload['color2'])
+                # missing_keys = [key for key in ['end', 'color'] if key not in payload]
+                # if any(missing_keys):
+                #     log.error("mqtt message missing required key(s) %s" % missing_keys)
+                #     return
 
+
+                # elif (payload['type'] == 'colorcollide'):
+                #     if self._handle_color_collide:
+                #         self._handle_color_collide(payload['position'], payload['color1'], payload['color2'])
+
+
+                # else:
+                #     log.warning("unknown message type")
 
             else:
-                log.warning("unknown message type")
+                log.info("ignored message from topic '%s'" % msg.topic)
 
+        except:
+            import traceback
+            traceback.print_exc()
 
 
     def connect(self):
+        self.log.debug("connecting to {} {}".format(self.address, self.port))
         self.client.connect(self.address, self.port, keepalive=60)
         self.client.loop_forever()
 
 
-    def set_color_send_handler(self, func):
-        self._handle_color_send = func
-
-    def set_color_collide_handler(self, func):
-        self._handle_color_collide = func
+    def set_handler(self, func):
+        self._msg_handler = func
 
 
 class DMXAdapter:
     def __init__(self):
-        pass
+        from ola.ClientWrapper import ClientWrapper
+        self.wrapper = ClientWrapper()
+
+    def _sent_callback(self, status):
+        if (not status.Succeeded()):
+            log.error("Failed to send DMX: %s" % status.message)
+        self.wrapper.Stop()
+
+    def send(self, data):
+        self.wrapper.Client().SendDmx(0, data, self._sent_callback)
+        self.wrapper.Run()
 
 
 class Animator:
     def __init__(self):
-        self.array = []
+        self.array = array.array('B')
 
-    def pulse(self, color):
-        pass
+    def pulse(self, color1, color2, color3, send):
+        import time
+        import math
+
+        def _pulse(distance, radius):
+            if distance >= radius:
+                return 0
+            value = math.cos((math.pi*distance)/radius)+1
+            return value
+
+        from Color import Vector
+        nc = Vector(
+            color1[0],
+            color1[1],
+            color1[2],
+        )
+        sc = Vector(
+            color2[0],
+            color2[1],
+            color2[2],
+        )
+        new_color = Vector(
+            color3[0],
+            color3[1],
+            color3[2],
+        )
+
+        tick = 0
+        np = 128
+        sp = 0
+        done = False
+        collision_position = 64
+
+        while True:
+            lightstate = array.array('B')
+
+            if (np <= sp):
+                for i in range(128):
+                    distance = int(abs(i-collision_position))
+                    pixel_color = new_color * _pulse(distance, tick)
+                    print(distance, tick, pixel_color)
+                    lightstate.extend((int(min(pixel_color[0], 255)), int(min(pixel_color[1], 255)), int(min(pixel_color[2], 255)), 0))
+
+                if tick >= 128:
+                    lightstate = array.array('B')
+                    for i in range(128):
+                        lightstate.extend((0,0,0,0))
+                    send(lightstate)
+                    return
+
+            else:
+                for i in range(128):
+                    if i == np:
+                        lightstate.extend((color1[0], color1[1], color1[2], 0))
+                    elif i == sp:
+                        lightstate.extend((color2[0], color2[1], color2[2], 0))
+                    else:
+                        lightstate.extend((0,0,0,0))
+
+                if (np-1 <= sp+1):
+                    tick = 0
+
+            send(lightstate)
+            np -= 1
+            sp += 1
+            tick += 1
+            time.sleep(.01)
+
+
+
 
     # def collide(self, position, color1, color2):
     #     log.debug("collision %s" % (position, color1, color2))
 
-
-
-class ColorLaunchController:
+class Controller:
     def __init__(self):
         self.config = read_config()
 
@@ -108,11 +192,25 @@ class ColorLaunchController:
         self.output_adapter = DMXAdapter()
         self.animator = Animator()
 
-        self.input_adapter.set_color_send_handler(self.animator.pulse)
+        self.input_adapter.set_handler(self.handle_message)
 
+    def handle_message(self, msg):
+        color1 = msg['colorValues'][0]
+        color2 = msg['colorValues'][1]
+        color3 = msg['colorValues'][2]
+        data = self.animator.pulse(color1, color2, color3, self.output_adapter.send)
+        # self.output_adapter.send(data)
 
     def start(self):
         self.input_adapter.connect()
+
+
+class ColorLaunchController(Controller):
+    def __init__(self):
+        super().__init__()
+
+    # def handle_message(self, msg):
+    #     print("handling message", msg)
 
 
 if __name__ == '__main__':
