@@ -4,6 +4,6 @@ It connects to a remote server via mosquitto and listens for colorsend events, a
 
 Usage:
 
-   ./ColorLaunch.py
+    ./ColorLaunch.py
 
 Configuration is loaded from a file located in the same directory (`config.json`) or a path specified with the `COLORLAUNCH_CONFIG` environment variable.
