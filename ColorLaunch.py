@@ -3,29 +3,38 @@
 import json
 import paho.mqtt.client as mqtt
 import time
-import logging
+import logging as log
 import array
+import os
 
-logging.basicConfig(level=logging.DEBUG)
-log = logging.getLogger(__name__)
+log.basicConfig(level=log.DEBUG,
+                format='%(levelname)-8s %(module)s.%(funcName)s() +%(lineno)s: %(message)s'
+                )
 
 def read_config():
+
     config_path = 'config.json'
+    if 'COLORLAUNCH_CONFIG' in os.environ:
+        config_path = os.environ['COLORLAUNCH_CONFIG']
+
+    # TODO exceptions instead of exit side-effect
+    if not os.path.isfile(config_path):
+        log.error("Failed to find configuration file '%s'", config_path)
+        exit(1)
 
     with open(config_path) as config_file:
         try:
             config = json.load(config_file)
         except json.decoder.JSONDecodeError as err:
-            log.error("invalid json in config: %s" % err)
+            log.error("Invalid json in configuration file '%s': %s", config_path, err)
             exit(1)
 
+    log.info("Loaded configuration from '%s'", config_path)
     return config
 
 
 class MQTTAdapter:
     def __init__(self, address, port):
-        self.log = logging.getLogger('MQTTAdapter')
-
         self.address = address
         self.port = port
 
@@ -79,7 +88,7 @@ class MQTTAdapter:
 
 
     def connect(self):
-        self.log.debug("connecting to {} {}".format(self.address, self.port))
+        log.debug("connecting to {} {}".format(self.address, self.port))
         self.client.connect(self.address, self.port, keepalive=60)
         self.client.loop_forever()
 
