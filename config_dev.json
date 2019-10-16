@@ -1,5 +1,5 @@
 {
-  "MQTT_BROKER_URL": "mqtt://localhost:1883",
+  "MQTT_BROKER_URL": "mqtt://dev.colorlaunch.net:1883",
   "LIGHT_COUNT": 128,
   "LIGHT_FORMAT": "RGBW",
   "DMX_UNIVERSE": 0
