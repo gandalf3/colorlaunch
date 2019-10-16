@@ -46,13 +46,13 @@ class MQTTAdapter:
         self._msg_handler    = None
 
     def _on_connect(self, client, userdata, flags, rc):
-        self.client.subscribe("/spectrum/colors")
+        self.client.subscribe("spectrum-0.1.0-dev/colors")
 
 
     def _on_message(self, client, userdata, msg):
 
         try:
-            if (msg.topic == "/spectrum/colors"):
+            if (msg.topic == "spectrum-0.1.0-dev/colors"):
                 
                 try:
                     payload = json.loads(msg.payload)
@@ -204,9 +204,9 @@ class Controller:
         self.input_adapter.set_handler(self.handle_message)
 
     def handle_message(self, msg):
-        color1 = msg['colorValues'][0]
-        color2 = msg['colorValues'][1]
-        color3 = msg['colorValues'][2]
+        color1 = msg['north_color']
+        color2 = msg['south_color']
+        color3 = msg['result_color']
         data = self.animator.pulse(color1, color2, color3, self.output_adapter.send)
         # self.output_adapter.send(data)
 
