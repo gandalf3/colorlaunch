@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 
 import json
-import paho.mqtt.client as mqtt
 import time
-import logging as log
+import math
 import array
 import os
+import logging as log
+import paho.mqtt.client as mqtt
+from Color import Color
 
 log.basicConfig(level=log.DEBUG,
                 format='%(levelname)-8s %(module)s.%(funcName)s() +%(lineno)s: %(message)s'
                 )
+
 
 def read_config():
 
@@ -17,7 +20,6 @@ def read_config():
     if 'COLORLAUNCH_CONFIG' in os.environ:
         config_path = os.environ['COLORLAUNCH_CONFIG']
 
-    # TODO exceptions instead of exit side-effect
     if not os.path.isfile(config_path):
         log.error("Failed to find configuration file '%s'", config_path)
         exit(1)
@@ -29,8 +31,53 @@ def read_config():
             log.error("Invalid json in configuration file '%s': %s", config_path, err)
             exit(1)
 
-    log.info("Loaded configuration from '%s'", config_path)
+    log.debug("Reading configuration from '%s'", config_path)
     return config
+
+
+class Game:
+    def __init__(self):
+        self.version = None
+        self.name = None
+
+    def get_topic_handlers(self):
+        raise NotImplementedError
+
+class TopicHandler():
+    def __init__(self, topic, func):
+        self.topic = topic
+        self.func = func
+
+    def __repr__(self):
+        return "TopicHandler('{}')".format(self.topic)
+
+class ColorLaunch(Game):
+    def __init__(self):
+        super().__init__()
+        self.name = "spectrum"
+        self.version = (0, 1, 0)
+        self.devmode = True
+
+    def get_game_topic(self):
+        topic = "{}-{}.{}.{}".format(self.name, *self.version)
+        if (self.devmode):
+            topic += '-dev'
+
+        return topic
+
+    def get_topic_handlers(self):
+        return [
+            TopicHandler(self.get_game_topic() + '/colors', self.handle_color)
+        ]
+
+    def handle_color(self, msg):
+        color1 = msg['north_color']
+        color2 = msg['south_color']
+        color3 = msg['result_color']
+        data = self.animator.pulse(color1, color2, color3)
+
+
+# class SimpleAnimator(Animator):
 
 
 class MQTTAdapter:
@@ -43,54 +90,55 @@ class MQTTAdapter:
         self.client.on_message = self._on_message
         self.client.enable_logger()
 
-        self._msg_handler    = None
+        self._msg_handlers    = {}
+
+    def register_handlers(self, topic_handler_list):
+        log.debug("registering topic handlers: %s", topic_handler_list)
+
+        for handler in topic_handler_list:
+            self._msg_handlers[handler.topic] = handler.func
 
     def _on_connect(self, client, userdata, flags, rc):
-        self.client.subscribe("spectrum-0.1.0-dev/colors")
+        for topic in self._msg_handlers.keys():
+            self.client.subscribe(topic)
 
 
     def _on_message(self, client, userdata, msg):
 
+        if msg.topic not in self._msg_handlers.keys():
+            log.warning("ignored message for unknown topic '%s'" % msg.topic)
+            return
+
         try:
-            if (msg.topic == "spectrum-0.1.0-dev/colors"):
-                
-                try:
-                    payload = json.loads(msg.payload)
-                except json.decoder.JSONDecodeError as err:
-                    log.error("invalid json in mqtt message %s" % err)
-                    return
+            payload = json.loads(msg.payload)
+        except json.decoder.JSONDecodeError as err:
+            log.warning("invalid json in mqtt message on topic '%s': %s", msg.topic, err)
+            return
 
-                if self._msg_handler:
-                    self._msg_handler(payload)
-                else:
-                    log.warning("no handler defined, message ignored")
-
-                # missing_keys = [key for key in ['end', 'color'] if key not in payload]
-                # if any(missing_keys):
-                #     log.error("mqtt message missing required key(s) %s" % missing_keys)
-                #     return
-
-
-                # elif (payload['type'] == 'colorcollide'):
-                #     if self._handle_color_collide:
-                #         self._handle_color_collide(payload['position'], payload['color1'], payload['color2'])
-
-
-                # else:
-                #     log.warning("unknown message type")
-
-            else:
-                log.info("ignored message from topic '%s'" % msg.topic)
-
-        except:
-            import traceback
-            traceback.print_exc()
+        self._msg_handlers[msg.topic](payload)
 
 
     def connect(self):
         log.debug("connecting to {} {}".format(self.address, self.port))
         self.client.connect(self.address, self.port, keepalive=60)
-        self.client.loop_forever()
+        self.client.loop_start()
+
+    def run(self):
+        while True:
+            self.heartbeat()
+            time.sleep(15)
+
+
+    def heartbeat(self):
+        heartbeat = json.dumps({
+            'code':       200,
+            'message':    "The pi is fine",
+            'timestamp':  int(time.time()*1000),
+        })
+
+        log.debug("sending heartbeat %s", heartbeat);
+
+        self.client.publish('spectrum-0.1.0-dev/heartbeat', payload=heartbeat, qos=0, retain=True)
 
 
     def set_handler(self, func):
@@ -116,9 +164,10 @@ class Animator:
     def __init__(self):
         self.array = array.array('B')
 
+    def idle():
+        pass
+
     def pulse(self, color1, color2, color3, send):
-        import time
-        import math
 
         def _pulse(distance, radius):
             if distance >= radius:
@@ -197,31 +246,27 @@ class Controller:
         from urllib.parse import urlparse
 
         url = urlparse(self.config['MQTT_BROKER_URL'])
-        self.input_adapter = MQTTAdapter(url.hostname, url.port)
-        self.output_adapter = DMXAdapter()
-        self.animator = Animator()
+        self.control_adapter = MQTTAdapter(url.hostname, url.port)
+        self.led_adapter = DMXAdapter()
+        self.game = ColorLaunch()
 
-        self.input_adapter.set_handler(self.handle_message)
+        self.control_adapter.register_handlers(
+            self.game.get_topic_handlers()
+        )
 
     def handle_message(self, msg):
         color1 = msg['north_color']
         color2 = msg['south_color']
         color3 = msg['result_color']
-        data = self.animator.pulse(color1, color2, color3, self.output_adapter.send)
-        # self.output_adapter.send(data)
+        data = self.animator.pulse(color1, color2, color3, self.led_adapter.send)
+        # self.led_adapter.send(data)
 
     def start(self):
-        self.input_adapter.connect()
+        self.control_adapter.connect()
+        self.control_adapter.run();
 
-
-class ColorLaunchController(Controller):
-    def __init__(self):
-        super().__init__()
-
-    # def handle_message(self, msg):
-    #     print("handling message", msg)
 
 
 if __name__ == '__main__':
-    clc = ColorLaunchController()
-    clc.start()
+    cont = Controller()
+    cont.start()
