@@ -47,9 +47,19 @@ class TopicHandler():
     def __init__(self, topic, func):
         self.topic = topic
         self.func = func
+        self.except_handler = func
 
     def __repr__(self):
         return "TopicHandler('{}')".format(self.topic)
+
+    def __call__(self, *args, exception_handler=None):
+        try:
+            self.func(*args)
+        except:
+            if exception_handler:
+                exception_handler()
+
+            raise
 
 class ColorLaunch(Game):
     def __init__(self):
@@ -90,22 +100,26 @@ class MQTTAdapter:
         self.client.on_message = self._on_message
         self.client.enable_logger()
 
-        self._msg_handlers    = {}
+        self._topic_handlers    = {}
 
+        self._is_fine = True
+            
+
+    # takes a list of TopicHandler objects, which wrap 
     def register_handlers(self, topic_handler_list):
         log.debug("registering topic handlers: %s", topic_handler_list)
 
         for handler in topic_handler_list:
-            self._msg_handlers[handler.topic] = handler.func
+            self._topic_handlers[handler.topic] = handler
 
     def _on_connect(self, client, userdata, flags, rc):
-        for topic in self._msg_handlers.keys():
+        for topic in self._topic_handlers.keys():
             self.client.subscribe(topic)
 
 
     def _on_message(self, client, userdata, msg):
 
-        if msg.topic not in self._msg_handlers.keys():
+        if msg.topic not in self._topic_handlers.keys():
             log.warning("ignored message for unknown topic '%s'" % msg.topic)
             return
 
@@ -115,7 +129,11 @@ class MQTTAdapter:
             log.warning("invalid json in mqtt message on topic '%s': %s", msg.topic, err)
             return
 
-        self._msg_handlers[msg.topic](payload)
+        def set_exception_flag():
+            self._is_fine = False
+            log.exception("Encountered an unhandled exception in handler for topic '%s', payload was: '%s'", msg.topic, payload)
+
+        self._topic_handlers[msg.topic](payload, exception_handler=set_exception_flag)
 
 
     def connect(self):
@@ -130,15 +148,19 @@ class MQTTAdapter:
 
 
     def heartbeat(self):
-        heartbeat = json.dumps({
+        heartbeat = {
             'code':       200,
             'message':    "The pi is fine",
             'timestamp':  int(time.time()*1000),
-        })
+        }
+
+        if (not self._is_fine):
+            heartbeat['code'] = 500
+            heartbeat['message'] = "The pi is not fine"
 
         log.debug("sending heartbeat %s", heartbeat);
 
-        self.client.publish('spectrum-0.1.0-dev/heartbeat', payload=heartbeat, qos=0, retain=True)
+        self.client.publish('spectrum-0.1.0-dev/heartbeat', payload=json.dumps(heartbeat), qos=0, retain=True)
 
 
     def set_handler(self, func):
