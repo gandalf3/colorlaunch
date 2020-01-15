@@ -280,7 +280,7 @@ class Controller:
         from urllib.parse import urlparse
 
         url = urlparse(self.config['MQTT_BROKER_URL'])
-        self.control_adapter = MQTTAdapter(url.hostname, url.port)
+        self.control_adapter = MQTTAdapter(url.hostname, url.port, heartbeat_interval=self.config['HEARTBEAT_SECONDS'])
         self.led_adapter = DMXAdapter()
         self.game = ColorLaunch()
 
