@@ -1,7 +1,9 @@
 {
   "MQTT_BROKER_URL": "mqtt://localhost:1883",
   "LIGHT_COUNT": 128,
+  "DMX_UNIVERSE": 0,
   "LIGHT_FORMAT": "RGBW",
-  "DMX_UNIVERSE": 0
+  "HEARTBEAT_SECONDS": 15,
+  "LOG_LEVEL": 0
 }
 
