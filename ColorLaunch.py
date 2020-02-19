@@ -3,7 +3,9 @@
 import json
 import time
 import math
+import threading
 import array
+import queue
 import os
 import logging as log
 import paho.mqtt.client as mqtt
@@ -71,7 +73,7 @@ class ColorLaunch(Game):
         self.version = (0, 1, 0)
         self.devmode = True
         self.animator = PulseAnimator()
-        self.led_adapter = None
+        # self.led_adapter = None
 
     def get_game_topic(self):
         topic = "{}-{}.{}.{}".format(self.name, *self.version)
@@ -93,21 +95,28 @@ class ColorLaunch(Game):
         color2 = msg['south_color']
         color3 = msg['result_color']
 
-        # TODO break led adapter out of animator
-        # data = self.animator.pulse(color1, color2, color3)
-
-        if self.led_adapter:
-            self.animator.pulse(color1, color2, color3, self.led_adapter.send)
+        self.animator.pulse(color1, color2, color3, self.led_adapter.send)
 
 
-# class SimpleAnimator(Animator):
-
-class PulseAnimator:
+class Animator:
     def __init__(self):
-        self.array = array.array('B')
+        # TODO use DMX constants and
+        self.lightstate = array.array('B', [0] * 512)
+        self.lock = threading.Lock()
+
+    def step(self, dt):
+        raise NotImplementedError
+
+class PulseAnimator(Animator):
+    # def __init__(self):
+    #     pass
 
     def idle():
         pass
+
+    def step(self, dt):
+        with self.lock:
+            self.lightstate[0] = 200
 
     def pulse(self, color1, color2, color3, send):
 
@@ -258,19 +267,58 @@ class MQTTAdapter:
         self._msg_handler = func
 
 
-class DMXAdapter:
+class LightAdapter:
     def __init__(self):
+        self.animator = None
+
+    def send(self, data):
+        raise NotImplementedError
+
+    def set_animator(self, animator):
+        self.animator = animator
+
+class DMXAdapter(LightAdapter):
+    def __init__(self):
+        pass
+
+    def start(self):
         from ola.ClientWrapper import ClientWrapper
-        self.wrapper = ClientWrapper()
+        from ola.DMXConstants import DMX_MIN_SLOT_VALUE, DMX_MAX_SLOT_VALUE, DMX_UNIVERSE_SIZE
+        self._universe = 0
+        self._wrapper = ClientWrapper()
+        self._client = self._wrapper.Client()
+
+        self.run()
+
+
+    # TODO We could use OLA's internal event scheduling system, but currently
+    # I'm not aware of any obvious reason to do so. Nevertheless it bears
+    # further investigation.
 
     def _sent_callback(self, status):
         if (not status.Succeeded()):
+            # TODO catch this and report it in our heartbeat
             log.error("Failed to send DMX: %s" % status.message)
-        self.wrapper.Stop()
+        # Always stop, as we call ourselves from a loop
+        self._wrapper.Stop()
 
     def send(self, data):
-        self.wrapper.Client().SendDmx(0, data, self._sent_callback)
-        self.wrapper.Run()
+        self._client.SendDmx(0, data, self._sent_callback)
+        self._wrapper.Run()
+
+    def run(self):
+        dt_start = time.time_ns()
+
+        while True:
+            dt = time.time_ns() - dt_start
+            dt_start = time.time_ns()
+
+            if self.animator:
+                self.animator.step(dt/(10**9))
+                self.send(self.animator.lightstate)
+
+            # TODO use configuration
+            time.sleep(1/60)
 
 
 class Controller:
@@ -278,22 +326,25 @@ class Controller:
         self.config = read_config()
 
         from urllib.parse import urlparse
-
         url = urlparse(self.config['MQTT_BROKER_URL'])
-        self.control_adapter = MQTTAdapter(url.hostname, url.port, heartbeat_interval=self.config['HEARTBEAT_SECONDS'])
-        self.led_adapter = DMXAdapter()
-        self.game = ColorLaunch()
 
-        self.control_adapter.register_handlers(
+        self.game = ColorLaunch()
+        self.command_adapter = MQTTAdapter(url.hostname, url.port, heartbeat_interval=self.config['HEARTBEAT_SECONDS'])
+        self.led_adapter = DMXAdapter()
+
+        # self.game.set_led_adapter(self.led_adapter)
+        self.command_adapter.register_handlers(
             self.game.get_topic_handlers()
         )
+        self.led_adapter.set_animator(self.game.animator)
 
-        self.game.set_led_adapter(self.led_adapter)
 
     def start(self):
-        self.control_adapter.connect()
-        self.control_adapter.run();
-
+        # self.command_adapter.connect()
+        # self.command_thread = threading.Thread(target=self.command_adapter.run)
+        self.led_thread = threading.Thread(target=self.led_adapter.start)
+        self.led_thread.start()
+        # self.led_thread.join()
 
 
 if __name__ == '__main__':
