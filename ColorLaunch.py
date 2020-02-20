@@ -67,12 +67,12 @@ class TopicHandler():
             raise
 
 class ColorLaunch(Game):
-    def __init__(self):
+    def __init__(self, config):
         super().__init__()
         self.name = "spectrum"
         self.version = (0, 1, 0)
         self.devmode = True
-        self.animator = PulseAnimator()
+        self.animator = SpringAnimator(config)
         # self.led_adapter = None
 
     def get_game_topic(self):
@@ -95,97 +95,80 @@ class ColorLaunch(Game):
         color2 = msg['south_color']
         color3 = msg['result_color']
 
-        self.animator.pulse(color1, color2, color3, self.led_adapter.send)
+        self.animator.pulse(color1, color2, color3)
 
 
 class Animator:
-    def __init__(self):
-        # TODO use DMX constants and
+    def __init__(self, config):
+        self._light_count = config['LIGHT_COUNT']
+        self._light_format = config['LIGHT_FORMAT']
+        # TODO use DMX constants and configuration
         self.lightstate = array.array('B', [0] * 512)
         self.lock = threading.Lock()
 
     def step(self, dt):
         raise NotImplementedError
 
+    def clampf(self, value, _min=0.0, _max=1.0):
+        return max(min(value, _max), _min)
+
+    def clampb(self, value, _min=0, _max=255):
+        return max(min(int(value), _max), _min)
+
 class PulseAnimator(Animator):
-    # def __init__(self):
-    #     pass
+    def __init__(self, config):
+        super().__init__(config)
 
     def idle():
         pass
 
     def step(self, dt):
+
+
+    def pulse(self, color1, color2, color3):
+        pass
+
+
+class SpringAnimator(Animator):
+    def __init__(self, config):
+        super().__init__(config)
+        self.springs = array.array('f', [0.0] * self._light_count)
+        self.velocities = array.array('f', [0.0] * self._light_count)
+        self.spring_mass = 10
+        # self.springs[0] = 1
+        # self.springs[self._light_count-1] = 1
+        self.springs[int((self._light_count-1)/2)] = 10
+        self.speed = 60
+
+    def idle():
+        pass
+
+    def step(self, dt):
+        k = .8
+
+        for i, x in enumerate(self.springs):
+            # a very naive spring physics simulation
+            force = k*(1/3)*(-x) + \
+                    k*(1/3)*(self.springs[max(i-1, 0)]-x) + \
+                    k*(1/3)*(self.springs[min(i+1, self._light_count-1)]-x)
+
+            self.velocities[i] += force/self.spring_mass
+            self.velocities[i] *= .9
+            self.springs[i] += self.velocities[i]*dt*self.speed
+
+            # self.springs[i] = self.clampf(self.springs[i], -1, 1)
+
         with self.lock:
-            self.lightstate[0] = 200
+            print(self.springs[50])
+            for i in range(self._light_count):
+                val = self.clampb(((self.springs[i]))*255)
+                self.lightstate[4*i] = val
+                self.lightstate[(4*i)+1] = val 
+                self.lightstate[(4*i)+2] = val 
 
-    def pulse(self, color1, color2, color3, send):
-
-        def _pulse(distance, radius):
-            if distance >= radius:
-                return 0
-            value = math.cos((math.pi*distance)/radius)+1
-            return value
-
-        nc = Color(
-            color1[0],
-            color1[1],
-            color1[2],
-        )
-        sc = Color(
-            color2[0],
-            color2[1],
-            color2[2],
-        )
-        new_color = Color(
-            color3[0],
-            color3[1],
-            color3[2],
-        )
-
-        tick = 0
-        np = 128
-        sp = 0
-        done = False
-        collision_position = 64
-
-        while True:
-            lightstate = array.array('B')
-
-            if (np <= sp):
-                for i in range(128):
-                    distance = int(abs(i-collision_position))
-                    pixel_color = new_color * _pulse(distance, tick)
-                    print(distance, tick, pixel_color)
-                    lightstate.extend((int(min(pixel_color[0], 255)), int(min(pixel_color[1], 255)), int(min(pixel_color[2], 255)), 0))
-
-                if tick >= 128:
-                    lightstate = array.array('B')
-                    for i in range(128):
-                        lightstate.extend((0,0,0,0))
-                    send(lightstate)
-                    return
-
-            else:
-                for i in range(128):
-                    if i == np:
-                        lightstate.extend((color1[0], color1[1], color1[2], 0))
-                    elif i == sp:
-                        lightstate.extend((color2[0], color2[1], color2[2], 0))
-                    else:
-                        lightstate.extend((0,0,0,0))
-
-                if (np-1 <= sp+1):
-                    tick = 0
-
-            send(lightstate)
-            np -= 1
-            sp += 1
-            tick += 1
-            time.sleep(.01)
-
-
-    # def collide(self, position, color1, color2):
-    #     log.debug("collision %s" % (position, color1, color2))
+    def pulse(self, color1, color2, color3):
+        self.springs[0] = 1.0
+        self.springs[self._light_count-1] = 1.0
 
 
 class MQTTAdapter:
@@ -309,12 +292,17 @@ class DMXAdapter(LightAdapter):
     def run(self):
         dt_start = time.time_ns()
 
+        # awkwardly wait around while we waight for an animator to be assigned
+        while not self.animator:
+            time.sleep(1)
+
         while True:
             dt = time.time_ns() - dt_start
             dt_start = time.time_ns()
 
-            if self.animator:
-                self.animator.step(dt/(10**9))
+            self.animator.step(dt/(10**9))
+
+            with self.animator.lock:
                 self.send(self.animator.lightstate)
 
             # TODO use configuration
@@ -328,7 +316,7 @@ class Controller:
         from urllib.parse import urlparse
         url = urlparse(self.config['MQTT_BROKER_URL'])
 
-        self.game = ColorLaunch()
+        self.game = ColorLaunch(self.config)
         self.command_adapter = MQTTAdapter(url.hostname, url.port, heartbeat_interval=self.config['HEARTBEAT_SECONDS'])
         self.led_adapter = DMXAdapter()
 
