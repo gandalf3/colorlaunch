@@ -72,7 +72,7 @@ class ColorLaunch(Game):
         self.name = "spectrum"
         self.version = (0, 1, 0)
         self.devmode = True
-        self.animator = SpringAnimator(config)
+        self.animator = PulseAnimator(config)
         # self.led_adapter = None
 
     def get_game_topic(self):
@@ -118,15 +118,85 @@ class Animator:
 class PulseAnimator(Animator):
     def __init__(self, config):
         super().__init__(config)
+        self.current_pulse = None
+        # self.current_time
+        # self.state = 'IDLE'
+
 
     def idle():
         pass
 
     def step(self, dt):
+        if not self.current_pulse:
+            return
 
+        # print(self.current_pulse)
+
+        def _pulse(distance, radius):
+            if distance >= radius:
+                return 0
+            value = math.cos((math.pi*distance)/radius)+1
+            return value
+
+        nc = self.current_pulse['north_color']
+        sc = self.current_pulse['south_color']
+        new_color = self.current_pulse['new_color']
+
+        for element in range(self._light_count):
+
+            el_idx = len(self._light_format) * element
+            for i, component in enumerate(self._light_format):
+                if component == 'R':
+                    self.lightstate[el_idx+i] = 128;
+                elif component == 'G':
+                    self.lightstate[el_idx+i] = 0;
+                elif component == 'B':
+                    self.lightstate[el_idx+i] = 5;
+
+        # np = self.current_pulse['north_p']
+        # sp = self.current_pulse['south_p']
+        # done = False
+        # collision_position = abs(np-sp)/2
+        #
+        # for i in range(128):
+        #     distance = int(abs(i-collision_position))
+        #     pixel_color = new_color * _pulse(distance, tick)
+        #     print(distance, tick, pixel_color)
+        #     lightstate.extend((int(min(pixel_color[0], 255)), int(min(pixel_color[1], 255)), int(min(pixel_color[2], 255)), 0))
+        #
+        #     if tick >= 128:
+        #         lightstate = array.array('B')
+        #         for i in range(128):
+        #             lightstate.extend((0,0,0,0))
+        #         send(lightstate)
+        #         return
+        #
+        # else:
+        #     for i in range(128):
+        #         if i == np:
+        #             lightstate.extend((color1[0], color1[1], color1[2], 0))
+        #         elif i == sp:
+        #             lightstate.extend((color2[0], color2[1], color2[2], 0))
+        #         else:
+        #             lightstate.extend((0,0,0,0))
+        #
+        #     if (np-1 <= sp+1):
+        #         tick = 0
+        #
+        #     np -= 1
+        #     sp += 1
+        #     tick += 1
+        #
 
     def pulse(self, color1, color2, color3):
-        pass
+        self.current_pulse = {
+            'north_color': color1,
+            'south_color': color2,
+            'new_color': color3,
+            'south_p': 0,
+            'north_p': self._light_count,
+            'start': time.time(),
+        }
 
 
 class SpringAnimator(Animator):
@@ -181,9 +251,9 @@ class MQTTAdapter:
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
 
-        #self.client.enable_logger()
+        # self.client.enable_logger()
 
-        self._topic_handlers    = {}
+        self._topic_handlers = {}
 
         self._is_fine = True
             
@@ -201,6 +271,7 @@ class MQTTAdapter:
 
 
     def _on_message(self, client, userdata, msg):
+        log.debug("Recieved a message: %s" % msg.topic)
 
         if msg.topic not in self._topic_handlers.keys():
             log.warning("ignored message for unknown topic '%s'" % msg.topic)
@@ -328,8 +399,9 @@ class Controller:
 
 
     def start(self):
-        # self.command_adapter.connect()
-        # self.command_thread = threading.Thread(target=self.command_adapter.run)
+        self.command_adapter.connect()
+        self.command_thread = threading.Thread(target=self.command_adapter.run)
+        self.command_thread.start()
         self.led_thread = threading.Thread(target=self.led_adapter.start)
         self.led_thread.start()
         # self.led_thread.join()
