@@ -26,6 +26,10 @@ THE SOFTWARE.
 import math
 
 class Vector(object):
+    @classmethod
+    def new(cls, *args, **kwargs):
+        return cls(*args, **kwargs)
+
     def __init__(self, *args):
         """ Create a vector, example: v = Vector(1,2) """
         if len(args)==0: self.values = (0,0)
@@ -37,7 +41,7 @@ class Vector(object):
         
     def argument(self):
         """ Returns the argument of the vector, the angle clockwise from +y."""
-        arg_in_rad = math.acos(Vector(0,1)*self/self.norm())
+        arg_in_rad = math.acos(self.new(0,1)*self/self.norm())
         arg_in_deg = math.degrees(arg_in_rad)
         if self.values[0]<0: return 360 - arg_in_deg
         else: return arg_in_deg
@@ -46,7 +50,7 @@ class Vector(object):
         """ Returns a normalized unit vector """
         norm = self.norm()
         normed = tuple( comp/norm for comp in self )
-        return Vector(*normed)
+        return self.new(*normed)
     
     def rotate(self, *args):
         """ Rotate this vector. If passed a number, assumes this is a 
@@ -74,7 +78,7 @@ class Vector(object):
         dc, ds = math.cos(theta), math.sin(theta)
         x, y = self.values
         x, y = dc*x - ds*y, ds*x + dc*y
-        return Vector(x, y)
+        return self.new(x, y)
         
     def matrix_mult(self, matrix):
         """ Multiply this vector by a matrix.  Assuming matrix is a list of lists.
@@ -89,9 +93,9 @@ class Vector(object):
         
         # Grab a row from the matrix, make it a Vector, take the dot product, 
         # and store it as the first component
-        product = tuple(Vector(*row)*self for row in matrix)
+        product = tuple(self.new(*row)*self for row in matrix)
         
-        return Vector(*product)
+        return self.new(*product)
     
     def inner(self, other):
         """ Returns the dot product (inner product) of self and other vector
@@ -107,7 +111,7 @@ class Vector(object):
             return self.inner(other)
         elif type(other) == type(1) or type(other) == type(1.0):
             product = tuple( a * other for a in self )
-            return Vector(*product)
+            return self.new(*product)
     
     def __rmul__(self, other):
         """ Called if 4*self for instance """
@@ -116,17 +120,17 @@ class Vector(object):
     def __div__(self, other):
         if type(other) == type(1) or type(other) == type(1.0):
             divided = tuple( a / other for a in self )
-            return Vector(*divided)
+            return self.new(*divided)
     
     def __add__(self, other):
         """ Returns the vector addition of self and other """
         added = tuple( a + b for a, b in zip(self, other) )
-        return Vector(*added)
+        return self.new(*added)
     
     def __sub__(self, other):
         """ Returns the vector difference of self and other """
         subbed = tuple( a - b for a, b in zip(self, other) )
-        return Vector(*subbed)
+        return self.new(*subbed)
     
     def __iter__(self):
         return self.values.__iter__()
