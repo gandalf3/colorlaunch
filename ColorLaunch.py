@@ -5,7 +5,6 @@ import time
 import math
 import threading
 import array
-import queue
 import os
 import logging as log
 import paho.mqtt.client as mqtt
@@ -138,55 +137,59 @@ class PulseAnimator(Animator):
             value = math.cos((math.pi*distance)/radius)+1
             return value
 
-        nc = self.current_pulse['north_color']
-        sc = self.current_pulse['south_color']
-        new_color = self.current_pulse['new_color']
+        north_color = Color.from_8bit(*self.current_pulse['north_color'])
+        south_color = Color.from_8bit(*self.current_pulse['south_color'])
+        new_color = Color.from_8bit(*self.current_pulse['new_color'])
 
-        for element in range(self._light_count):
+        if self.current_pulse['collision'] == -1:
+            for element in range(self._light_count):
+                el_idx = len(self._light_format) * element
 
-            el_idx = len(self._light_format) * element
-            for i, component in enumerate(self._light_format):
-                if component == 'R':
-                    self.lightstate[el_idx+i] = 128;
-                elif component == 'G':
-                    self.lightstate[el_idx+i] = 0;
-                elif component == 'B':
-                    self.lightstate[el_idx+i] = 5;
+                if (element == self.current_pulse['north_p']):
+                    col = north_color
+                elif (element == self.current_pulse['south_p']):
+                    col = south_color
+                else:
+                    col = Color(0, 0, 0)
 
-        # np = self.current_pulse['north_p']
-        # sp = self.current_pulse['south_p']
-        # done = False
-        # collision_position = abs(np-sp)/2
-        #
-        # for i in range(128):
-        #     distance = int(abs(i-collision_position))
-        #     pixel_color = new_color * _pulse(distance, tick)
-        #     print(distance, tick, pixel_color)
-        #     lightstate.extend((int(min(pixel_color[0], 255)), int(min(pixel_color[1], 255)), int(min(pixel_color[2], 255)), 0))
-        #
-        #     if tick >= 128:
-        #         lightstate = array.array('B')
-        #         for i in range(128):
-        #             lightstate.extend((0,0,0,0))
-        #         send(lightstate)
-        #         return
-        #
-        # else:
-        #     for i in range(128):
-        #         if i == np:
-        #             lightstate.extend((color1[0], color1[1], color1[2], 0))
-        #         elif i == sp:
-        #             lightstate.extend((color2[0], color2[1], color2[2], 0))
-        #         else:
-        #             lightstate.extend((0,0,0,0))
-        #
-        #     if (np-1 <= sp+1):
-        #         tick = 0
-        #
-        #     np -= 1
-        #     sp += 1
-        #     tick += 1
-        #
+                for i, component in enumerate(self._light_format):
+                    if component == 'R':
+                        self.lightstate[el_idx+i] = col.as_8bit().r;
+                    elif component == 'G':
+                        self.lightstate[el_idx+i] = col.as_8bit().g;
+                    elif component == 'B':
+                        self.lightstate[el_idx+i] = col.as_8bit().b;
+
+            if (self.current_pulse['north_p'] <= self.current_pulse['south_p']):
+                self.current_pulse['collision'] = 0
+
+            self.current_pulse['north_p'] -= 1
+            self.current_pulse['south_p'] += 1
+            
+
+        else:
+            for element in range(self._light_count):
+                el_idx = len(self._light_format) * element
+                collision_position = self._light_count/2
+                distance = int(abs(element-collision_position))
+
+                col = new_color * _pulse(distance, self.current_pulse['collision']) * self.current_pulse['fade']
+
+                for i, component in enumerate(self._light_format):
+                    if component == 'R':
+                        self.lightstate[el_idx+i] = col.as_8bit().r;
+                    elif component == 'G':
+                        self.lightstate[el_idx+i] = col.as_8bit().g;
+                    elif component == 'B':
+                        self.lightstate[el_idx+i] = col.as_8bit().b;
+
+            self.current_pulse['collision'] += 1
+            if (self.current_pulse['collision'] > self._light_count):
+                self.current_pulse['fade'] *= .9
+
+                if (self.current_pulse['fade'] <= .001):
+                    self.current_pulse = None
+
 
     def pulse(self, color1, color2, color3):
         self.current_pulse = {
@@ -194,8 +197,10 @@ class PulseAnimator(Animator):
             'south_color': color2,
             'new_color': color3,
             'south_p': 0,
-            'north_p': self._light_count,
+            'north_p': self._light_count-1,
             'start': time.time(),
+            'collision': -1,
+            'fade': 1,
         }
 
 
@@ -312,7 +317,7 @@ class MQTTAdapter:
             heartbeat['code'] = 500
             heartbeat['message'] = "The pi is not fine"
 
-        log.debug("sending heartbeat %s", heartbeat);
+        # log.debug("sending heartbeat %s", heartbeat);
 
         self.client.publish('spectrum-0.1.0-dev/heartbeat', payload=json.dumps(heartbeat), qos=0, retain=True)
 
